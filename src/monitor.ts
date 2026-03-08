@@ -17,10 +17,9 @@
  */
 
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
-import { WSClient } from "@wecom/aibot-node-sdk";
+import { WSClient, generateReqId } from "@wecom/aibot-node-sdk";
 import type { WsFrame, Logger } from "@wecom/aibot-node-sdk";
 import { getWeComRuntime } from "./runtime.js";
-import { generateReqId } from "./utils.js";
 import type { ResolvedWeComAccount } from "./utils.js";
 import {
   CHANNEL_ID,
@@ -196,6 +195,15 @@ async function routeAndDispatchMessage(params: {
   const { ctxPayload, config, wsClient, frame, state, runtime, onCleanup } = params;
   const core = getWeComRuntime();
 
+  // 防止 onCleanup 被多次调用（onError 回调与 catch 块可能重复触发）
+  let cleanedUp = false;
+  const safeCleanup = () => {
+    if (!cleanedUp) {
+      cleanedUp = true;
+      onCleanup();
+    }
+  };
+
   try {
     await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -217,7 +225,7 @@ async function routeAndDispatchMessage(params: {
         },
         onError: (err, info) => {
           runtime.error?.(`[WeCom] ${info.kind} reply failed: ${String(err)}`);
-          onCleanup();
+          // 仅记录错误，不立即 cleanup，让外层 try/catch 统一处理最终回复和 cleanup
         },
       },
     });
@@ -234,10 +242,10 @@ async function routeAndDispatchMessage(params: {
       });
     }
 
-    onCleanup();
+    safeCleanup();
   } catch (err) {
     runtime.error?.(`[WeCom] Failed to process message: ${String(err)}`);
-    onCleanup();
+    safeCleanup();
   }
 }
 
@@ -496,16 +504,17 @@ export async function monitorWeComProvider(options: WeComMonitorOptions): Promis
       }
     });
 
-    // 启动前预热 reqId 缓存
+    // 启动前预热 reqId 缓存，确保完成后再建立连接，避免 getSync 在预热完成前返回 undefined
     warmupReqIdStore(account.accountId, (...args) => runtime.log?.(...args))
       .then((count) => {
         runtime.log?.(`[${account.accountId}] Warmed up ${count} reqId entries from disk`);
       })
       .catch((err) => {
         runtime.error?.(`[${account.accountId}] Failed to warmup reqId store: ${String(err)}`);
+      })
+      .finally(() => {
+        // 无论预热成功或失败，都建立连接
+        wsClient.connect();
       });
-
-    // 建立连接
-    wsClient.connect();
   });
 }
