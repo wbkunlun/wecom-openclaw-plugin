@@ -88,7 +88,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   allowFromKey: `channels.${CHANNEL_ID}.allowFrom`,
   getCurrent: (cfg) => {
     const account = resolveWeComAccount(cfg);
-    return account.config.dmPolicy ?? "pairing";
+    return account.config.dmPolicy ?? "open";
   },
   setPolicy: (cfg, policy) => {
     return setWeComDmPolicy(cfg, policy);
@@ -144,7 +144,7 @@ export const wecomOnboardingAdapter: ChannelOnboardingAdapter = {
       botId,
       secret,
       enabled: true,
-      dmPolicy: account.config.dmPolicy ?? "pairing",
+      dmPolicy: account.config.dmPolicy ?? "open",
       allowFrom: account.config.allowFrom ?? [],
     });
 

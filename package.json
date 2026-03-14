@@ -1,12 +1,13 @@
 {
   "name": "@wecom/wecom-openclaw-plugin",
-  "version": "1.0.7",
+  "version": "1.0.10",
   "type": "module",
   "main": "dist/index.cjs.js",
   "module": "dist/index.esm.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "skills",
     "openclaw.plugin.json",
     "README.md"
   ],
@@ -15,7 +16,8 @@
     "dev": "rollup -c -w",
     "clean": "rm -rf dist",
     "prebuild": "npm run clean",
-    "publish:release": "npm run prebuild && npm run build && npm publish"
+    "release": "node scripts/publish-all.mjs",
+    "release:dry": "node scripts/publish-all.mjs --dry-run"
   },
   "keywords": [
     "wecom",
@@ -54,7 +56,7 @@
     }
   },
   "dependencies": {
-    "@wecom/aibot-node-sdk": "^1.0.1",
+    "@wecom/aibot-node-sdk": "^1.0.2",
     "file-type": "^21.3.0"
   },
   "devDependencies": {

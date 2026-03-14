@@ -72,8 +72,52 @@ export const MEDIA_DOCUMENT_PLACEHOLDER = "<media:document>";
 // 默认值
 // ============================================================================
 
+// ============================================================================
+// MCP 配置
+// ============================================================================
+
+/** 获取 MCP 配置的 WebSocket 命令 */
+export const MCP_GET_CONFIG_CMD = "aibot_get_mcp_config";
+
+/** MCP 配置拉取超时时间（毫秒） */
+export const MCP_CONFIG_FETCH_TIMEOUT_MS = 15_000;
+
+/** 插件配置文件名 */
+import path from "path";
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+export const PLUGIN_JSON_FILENAME = "openclaw.plugin.json";
+export const PLUGIN_JSON_PATH = path.resolve(path.join(__dirname, "../", PLUGIN_JSON_FILENAME));
+
+// ============================================================================
+// 默认值
+// ============================================================================
+
 /** 默认媒体大小上限（MB） */
 export const DEFAULT_MEDIA_MAX_MB = 5;
 
 /** 文本分块大小上限 */
 export const TEXT_CHUNK_LIMIT = 4000;
+
+// ============================================================================
+// 媒体上传相关常量
+// ============================================================================
+
+/** 图片大小上限（字节）：10MB */
+export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+
+/** 视频大小上限（字节）：10MB */
+export const VIDEO_MAX_BYTES = 10 * 1024 * 1024;
+
+/** 语音大小上限（字节）：2MB */
+export const VOICE_MAX_BYTES = 2 * 1024 * 1024;
+
+/** 文件大小上限（字节）：20MB */
+export const FILE_MAX_BYTES = 20 * 1024 * 1024;
+
+/** 文件绝对上限（字节）：超过此值无法发送，等于 FILE_MAX_BYTES */
+export const ABSOLUTE_MAX_BYTES = FILE_MAX_BYTES;
+
+/** 上传分片大小（字节，Base64 编码前）：512KB */
+export const UPLOAD_CHUNK_SIZE = 512 * 1024;

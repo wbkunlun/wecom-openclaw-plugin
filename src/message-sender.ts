@@ -38,7 +38,7 @@ export async function sendWeComReply(params: {
   const streamId = existingStreamId || generateReqId("stream");
 
   if (!wsClient.isConnected) {
-    runtime.error?.(`[WeCom] WSClient not connected, cannot send reply`);
+    runtime.error?.(`[wecom] WSClient not connected, cannot send reply`);
     throw new Error("WSClient not connected");
   }
 
@@ -48,7 +48,7 @@ export async function sendWeComReply(params: {
     REPLY_SEND_TIMEOUT_MS,
     `Reply send timed out (streamId=${streamId})`,
   );
-  runtime.log?.(`[WeCom] Sent reply: streamId=${streamId}, finish=${finish}`);
+  runtime.log?.(`[plugin -> server] streamId=${streamId}, finish=${finish}, text=${text}`);
 
   return streamId;
 }

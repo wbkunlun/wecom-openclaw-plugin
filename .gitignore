@@ -20,3 +20,6 @@ yarn-error.log
 /package-lock.json
 
 .npmrc
+
+# 测试生成的媒体文件
+test-media-files

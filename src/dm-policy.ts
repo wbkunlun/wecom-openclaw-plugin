@@ -50,7 +50,7 @@ export async function checkDmPolicy(params: {
     return { allowed: true };
   }
 
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const dmPolicy = account.config.dmPolicy ?? "open";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
 
   // 如果 dmPolicy 是 disabled，直接拒绝

@@ -13,6 +13,7 @@ import { wecomOnboardingAdapter } from "./onboarding.js";
 import type { WeComConfig, ResolvedWeComAccount } from "./utils.js";
 import { resolveWeComAccount } from "./utils.js";
 import { CHANNEL_ID, TEXT_CHUNK_LIMIT } from "./const.js";
+import { uploadAndSendMedia } from "./media-uploader.js";
 
 /**
  * 使用 SDK 的 sendMessage 主动发送企业微信消息
@@ -33,8 +34,6 @@ async function sendWeComMessage({
   const channelPrefix = new RegExp(`^${CHANNEL_ID}:`, "i");
   const chatId = to.replace(channelPrefix, "");
 
-  console.log(`[WeCom] sendWeComMessage: ${JSON.stringify({to, content, accountId})}`);
-
   // 获取 WSClient 实例
   const wsClient = getWeComWebSocket(resolvedAccountId);
   if (!wsClient) {
@@ -48,7 +47,6 @@ async function sendWeComMessage({
   });
 
   const messageId = result?.headers?.req_id ?? `wecom-${Date.now()}`;
-  console.log(`[WeCom] Sent message to ${chatId}, messageId=${messageId}`);
 
   return {
     channel: CHANNEL_ID,
@@ -83,7 +81,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       //   content: " pairing approved",
       //   accountId: cfg.accountId,
       // });
-      console.log(`[WeCom] Pairing approved for user: ${id}`);
+      // Pairing approved for user
     },
   },
   onboarding: wecomOnboardingAdapter,
@@ -164,7 +162,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
     resolveDmPolicy: ({account}) => {
       const basePath = `channels.${CHANNEL_ID}.`;
       return {
-        policy: account.config.dmPolicy ?? "pairing",
+        policy: account.config.dmPolicy ?? "open",
         allowFrom: account.config.allowFrom ?? [],
         policyPath: `${basePath}dmPolicy`,
         allowFromPath: basePath,
@@ -176,7 +174,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       const warnings: string[] = [];
 
       // DM 策略警告
-      const dmPolicy = account.config.dmPolicy ?? "pairing";
+      const dmPolicy = account.config.dmPolicy ?? "open";
       if (dmPolicy === "open") {
         const hasWildcard = (account.config.allowFrom ?? []).some(
           (entry) => String(entry).trim() === "*"
@@ -225,17 +223,62 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
     listGroups: async () => [],
   },
   outbound: {
-    deliveryMode: "direct",
+    deliveryMode: "gateway",
     chunker: (text, limit) => getWeComRuntime().channel.text.chunkMarkdownText(text, limit),
     textChunkLimit: TEXT_CHUNK_LIMIT,
-    sendText: async ({to, text, accountId, ...rest}) => {
-      console.log(`[WeCom] sendText: ${JSON.stringify({to, text, accountId, ...rest})}`);
+    sendText: async ({to, text, accountId}) => {
       return sendWeComMessage({to, content: text, accountId: accountId ?? undefined});
     },
-    sendMedia: async ({to, text, mediaUrl, accountId, ...rest}) => {
-      console.log(`[WeCom] sendMedia: ${JSON.stringify({to, text, mediaUrl, accountId, ...rest})}`);
-      const content = `Sending attachments is not supported yet\n${text ? `${text}\n${mediaUrl}` : (mediaUrl ?? "")}`;
-      return sendWeComMessage({to, content, accountId: accountId ?? undefined});
+    sendMedia: async ({to, text, mediaUrl, mediaLocalRoots, accountId}) => {
+      const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+      const channelPrefix = new RegExp(`^${CHANNEL_ID}:`, "i");
+      const chatId = to.replace(channelPrefix, "");
+
+      // 获取 WSClient 实例
+      const wsClient = getWeComWebSocket(resolvedAccountId);
+      if (!wsClient) {
+        throw new Error(`WSClient not connected for account ${resolvedAccountId}`);
+      }
+
+      // 如果没有 mediaUrl，fallback 为纯文本
+      if (!mediaUrl) {
+        return sendWeComMessage({to, content: text || "", accountId: resolvedAccountId});
+      }
+
+      const result = await uploadAndSendMedia({
+        wsClient,
+        mediaUrl,
+        chatId,
+        mediaLocalRoots,
+      });
+
+      if (result.rejected) {
+        return sendWeComMessage({to, content: `⚠️ ${result.rejectReason}`, accountId: resolvedAccountId});
+      }
+
+      if (!result.ok) {
+        // 上传/发送失败，fallback 为文本 + URL
+        const fallbackContent = text
+          ? `${text}\n📎 ${mediaUrl}`
+          : `📎 ${mediaUrl}`;
+        return sendWeComMessage({to, content: fallbackContent, accountId: resolvedAccountId});
+      }
+
+      // 如有伴随文本，额外发送一条 markdown
+      if (text) {
+        await sendWeComMessage({to, content: text, accountId: resolvedAccountId});
+      }
+
+      // 如果有降级说明，额外发送提示
+      if (result.downgradeNote) {
+        await sendWeComMessage({to, content: `ℹ️ ${result.downgradeNote}`, accountId: resolvedAccountId});
+      }
+
+      return {
+        channel: CHANNEL_ID,
+        messageId: result.messageId!,
+        chatId,
+      };
     },
   },
   status: {

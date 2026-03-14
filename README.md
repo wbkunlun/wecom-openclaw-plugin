@@ -29,7 +29,15 @@
 
 - OpenClaw `>= 2026.2.13`
 
-### Installation
+### Quick Install
+
+Use the CLI tool to automatically install the plugin and complete bot configuration in one step:
+
+```shell
+npx -y @wecom/wecom-openclaw-cli install
+```
+
+### Manual Install
 
 ```shell
 openclaw plugins install @wecom/wecom-openclaw-plugin
@@ -62,7 +70,7 @@ openclaw gateway restart
 | `channels.wecom.secret` | WeCom bot secret | — | — |
 | `channels.wecom.enabled` | Enable the channel | `true` / `false` | `false` |
 | `channels.wecom.websocketUrl` | WebSocket endpoint | — | `wss://openws.work.weixin.qq.com` |
-| `channels.wecom.dmPolicy` | DM access policy | `pairing` / `open` / `allowlist` / `disabled` | `pairing` |
+| `channels.wecom.dmPolicy` | DM access policy | `pairing` / `open` / `allowlist` / `disabled` | `open` |
 | `channels.wecom.allowFrom` | DM allowlist (user IDs) | — | `[]` |
 | `channels.wecom.groupPolicy` | Group chat access policy | `open` / `allowlist` / `disabled` | `open` |
 | `channels.wecom.groupAllowFrom` | Group allowlist (group IDs) | — | `[]` |
@@ -74,7 +82,7 @@ openclaw gateway restart
 
 ### DM (Direct Message) Access
 
-**Default**: `dmPolicy: "pairing"` — unrecognized users will receive a pairing code.
+**Default**: `dmPolicy: "open"` — all users can send direct messages without approval.
 
 #### Approve Pairing
 
