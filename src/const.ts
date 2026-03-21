@@ -40,8 +40,11 @@ export const MESSAGE_PROCESS_TIMEOUT_MS = 5 * 60 * 1000;
 /** WebSocket 心跳间隔（毫秒） */
 export const WS_HEARTBEAT_INTERVAL_MS = 30_000;
 
-/** WebSocket 最大重连次数 */
-export const WS_MAX_RECONNECT_ATTEMPTS = 100;
+/** WebSocket 连接断开时的最大重连次数 */
+export const WS_MAX_RECONNECT_ATTEMPTS = 10;
+
+/** WebSocket 认证失败时的最大重试次数 */
+export const WS_MAX_AUTH_FAILURE_ATTEMPTS = 5;
 
 // ============================================================================
 // 消息状态管理配置

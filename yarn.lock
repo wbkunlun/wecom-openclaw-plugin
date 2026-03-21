@@ -2239,10 +2239,10 @@
   dependencies:
     "@types/node" "*"
 
-"@wecom/aibot-node-sdk@^1.0.3":
-  version "1.0.3"
-  resolved "https://registry.yarnpkg.com/@wecom/aibot-node-sdk/-/aibot-node-sdk-1.0.3.tgz#012618fb4fda17d6e8b0d70e65bebc0e9b0f8f29"
-  integrity sha512-IGOMuXPd1fB13H57OW+Z1/yNlM6ukSVr/h9O/HtV5E06lQv5KPGuVGTagC6vJoxV/lhcwJ756B2srTqrlz5coQ==
+"@wecom/aibot-node-sdk@^1.0.4":
+  version "1.0.4"
+  resolved "https://registry.yarnpkg.com/@wecom/aibot-node-sdk/-/aibot-node-sdk-1.0.4.tgz#7a2b3dc42aeefdacced49bc94b52618d4e9dab53"
+  integrity sha512-kZkrmlArq0NZyBvtOKw40m5nWTN1WlaA7XtqAo/1hn6N80P4c2mF99t3p1AMzj+dPo6OYvbsaelE8lbVWhkcBg==
   dependencies:
     axios "^1.6.7"
     eventemitter3 "^5.0.1"

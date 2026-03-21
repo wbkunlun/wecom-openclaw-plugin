@@ -62,6 +62,9 @@ interface McpSession {
 /** HTTP 请求超时时间（毫秒） */
 const HTTP_REQUEST_TIMEOUT_MS = 30_000;
 
+/** 媒体下载请求超时时间（毫秒），base64 编码的媒体文件最大可达 ~27MB */
+export const MEDIA_DOWNLOAD_TIMEOUT_MS = 120_000;
+
 /** 日志前缀 */
 const LOG_TAG = "[mcp]";
 
@@ -206,9 +209,10 @@ async function sendRawJsonRpc(
   url: string,
   session: McpSession,
   body: JsonRpcRequest,
+  timeoutMs: number = HTTP_REQUEST_TIMEOUT_MS,
 ): Promise<{ response: Response; rpcResult: unknown; newSessionId: string | null }> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), HTTP_REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -229,7 +233,7 @@ async function sendRawJsonRpc(
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
-      throw new Error(`MCP 请求超时 (${HTTP_REQUEST_TIMEOUT_MS}ms)`);
+      throw new Error(`MCP 请求超时 (${timeoutMs}ms)`);
     }
     throw new Error(`MCP 网络请求失败: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
@@ -453,6 +457,12 @@ export interface McpToolInfo {
   inputSchema?: Record<string, unknown>;
 }
 
+/** sendJsonRpc 的可选配置 */
+export interface SendJsonRpcOptions {
+  /** 自定义 HTTP 请求超时时间（毫秒），默认使用 HTTP_REQUEST_TIMEOUT_MS */
+  timeoutMs?: number;
+}
+
 /**
  * 发送 JSON-RPC 请求到 MCP Server（Streamable HTTP 协议）
  *
@@ -463,14 +473,17 @@ export interface McpToolInfo {
  * @param category - MCP 品类名称
  * @param method - JSON-RPC 方法名
  * @param params - JSON-RPC 参数
+ * @param options - 可选配置（如自定义超时）
  * @returns JSON-RPC result
  */
 export async function sendJsonRpc(
   category: string,
   method: string,
   params?: Record<string, unknown>,
+  options?: SendJsonRpcOptions,
 ): Promise<unknown> {
   const url = await getMcpUrl(category);
+  const timeoutMs = options?.timeoutMs;
 
   const body: JsonRpcRequest = {
     jsonrpc: "2.0",
@@ -482,7 +495,7 @@ export async function sendJsonRpc(
   let session = await getOrCreateSession(url, category);
 
   try {
-    const { rpcResult, newSessionId } = await sendRawJsonRpc(url, session, body);
+    const { rpcResult, newSessionId } = await sendRawJsonRpc(url, session, body, timeoutMs);
     // 用最新的 sessionId 更新 session
     if (newSessionId) {
       session.sessionId = newSessionId;
@@ -505,7 +518,7 @@ export async function sendJsonRpc(
 
       // 使用 rebuildSession 合并并发的 session 重建请求，避免竞态条件
       session = await rebuildSession(url, category);
-      const { rpcResult, newSessionId } = await sendRawJsonRpc(url, session, body);
+      const { rpcResult, newSessionId } = await sendRawJsonRpc(url, session, body, timeoutMs);
       if (newSessionId) {
         session.sessionId = newSessionId;
       }

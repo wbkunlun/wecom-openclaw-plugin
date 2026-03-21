@@ -346,6 +346,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         config: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
+        setStatus: ctx.setStatus,
       });
     },
     logoutAccount: async ({cfg}) => {

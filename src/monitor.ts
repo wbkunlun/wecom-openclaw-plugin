@@ -19,7 +19,7 @@
 import * as os from "os";
 import * as path from "path";
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
-import { WSClient, generateReqId } from "@wecom/aibot-node-sdk";
+import { WSClient, generateReqId, WSAuthFailureError, WSReconnectExhaustedError } from "@wecom/aibot-node-sdk";
 import type { WsFrame, Logger } from "@wecom/aibot-node-sdk";
 import { getWeComRuntime } from "./runtime.js";
 import { getDefaultMediaLocalRoots } from "./openclaw-compat.js";
@@ -32,6 +32,7 @@ import {
   MESSAGE_PROCESS_TIMEOUT_MS,
   WS_HEARTBEAT_INTERVAL_MS,
   WS_MAX_RECONNECT_ATTEMPTS,
+  WS_MAX_AUTH_FAILURE_ATTEMPTS,
   EVENT_ENTER_CHECK_UPDATE,
   CMD_ENTER_EVENT_REPLY,
   SCENE_WECOM_OPENCLAW,
@@ -645,9 +646,9 @@ function createSdkLogger(runtime: RuntimeEnv, accountId: string): Logger {
  * 使用 aibot-node-sdk 简化连接管理
  */
 export async function monitorWeComProvider(options: WeComMonitorOptions): Promise<void> {
-  const { account, config, runtime, abortSignal } = options;
+  const { account, config, runtime, abortSignal, setStatus } = options;
 
-  runtime.log?.(`[${account.accountId}] Initializing WSClient with SDK...`);
+  runtime.log?.(`[${account.accountId}] [${PLUGIN_VERSION}] Initializing WSClient with SDK...`);
 
   // 启动消息状态定期清理
   startMessageStateCleanup();
@@ -662,20 +663,28 @@ export async function monitorWeComProvider(options: WeComMonitorOptions): Promis
       logger,
       heartbeatInterval: WS_HEARTBEAT_INTERVAL_MS,
       maxReconnectAttempts: WS_MAX_RECONNECT_ATTEMPTS,
+      maxAuthFailureAttempts: WS_MAX_AUTH_FAILURE_ATTEMPTS,
       scene: SCENE_WECOM_OPENCLAW,
       plug_version: PLUGIN_VERSION,
     });
 
-    // 清理函数：确保所有资源被释放
+    // 防止 cleanup 被多次调用（abort handler、error handler、disconnected_event 可能竞态触发）
+    let cleanedUp = false;
+
+    // 清理函数：确保所有资源被释放（幂等）
     const cleanup = async () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       stopMessageStateCleanup();
       await cleanupAccount(account.accountId);
     };
 
-    // 处理中止信号
+    // 处理中止信号（框架 stopChannel 会触发 abort）
+    // resolve() 让 Promise settle → 框架清理 store.tasks/store.aborts
     if (abortSignal) {
       abortSignal.addEventListener("abort", async () => {
         runtime.log?.(`[${account.accountId}] Connection aborted`);
+        wsClient.disconnect();
         await cleanup();
         resolve();
       });
@@ -697,17 +706,88 @@ export async function monitorWeComProvider(options: WeComMonitorOptions): Promis
       runtime.log?.(`[${account.accountId}] WebSocket disconnected: ${reason}`);
     });
 
+    // 监听被踢下线事件（服务端因新连接建立而主动断开旧连接）
+    //
+    // SDK 内部已设置 isManualClose=true 阻止 SDK 层自动重连，连接不会自行恢复。
+    // **不 reject/resolve Promise**——保持 pending 以阻止框架层 auto-restart。
+    //
+    // 为什么不能 reject/resolve：
+    //   - reject → 框架 auto-restart 介入 → 新连接建立 → 又被踢 → 两个实例互踢无限循环
+    //   - resolve → 同上，框架 .then() 中的 auto-restart 也会触发
+    //
+    // Promise pending 的安全性：
+    //   - store.tasks.has(id) = true → 阻止 Health Monitor 直接 startChannel（startChannel 检查 tasks.has）
+    //   - 框架 stopChannel → abort() → abort handler 中 resolve() → tasks 正常清理
+    //   - 用户修改配置 → config reload → stopChannel + startChannel → 正常恢复
+    //
+    // 显式调用 wsClient.disconnect() 确保 SDK 内部资源（定时器、队列等）完全释放。
+    wsClient.on("event.disconnected_event", async () => {
+      const errorMsg = `Kicked by server: a new connection was established elsewhere. Auto-restart is suppressed to avoid mutual kicking. Please check for duplicate instances.`;
+      runtime.error?.(`[${account.accountId}] ${errorMsg}`);
+      wsClient.disconnect();
+      await cleanup();
+      setStatus?.({
+        accountId: account.accountId,
+        running: false,
+        lastError: errorMsg,
+        lastStopAt: Date.now(),
+      });
+      // Promise 保持 pending，不触发 auto-restart
+    });
+
     // 监听重连事件
     wsClient.on("reconnecting", (attempt) => {
       runtime.log?.(`[${account.accountId}] Reconnecting attempt ${attempt}...`);
     });
 
     // 监听错误事件
-    wsClient.on("error", (error) => {
+    wsClient.on("error", async (error) => {
       runtime.error?.(`[${account.accountId}] WebSocket error: ${error.message}`);
-      // 认证失败时拒绝 Promise
-      if (error.message.includes("Authentication failed")) {
+
+      if (error instanceof WSAuthFailureError) {
+        // 认证失败重试次数用尽（SDK 层已重试 WS_MAX_AUTH_FAILURE_ATTEMPTS 次）。
+        // 配置错误（如 botId/secret 无效），框架 auto-restart 也无法恢复。
+        //
+        // **不 reject/resolve Promise**——保持 pending 以阻止框架层 auto-restart。
+        //
+        // 为什么不能 reject/resolve：
+        //   - reject/resolve → 框架 auto-restart（最多 10 次）× SDK 重试（5 次）= 60 次无意义尝试
+        //   - 且 Health Monitor 每小时还会 resetRestartAttempts 再来一轮
+        //
+        // Promise pending 的安全性：同被踢下线场景
+        //   - store.tasks.has(id) = true → 阻止 Health Monitor 直接 startChannel
+        //   - 框架 stopChannel / config reload → abort handler 中 resolve() → 正常清理
+        //   - 用户修改配置后框架通过 reload 机制重新启动
+        const errorMsg = `Auth failure attempts exhausted (${WS_MAX_AUTH_FAILURE_ATTEMPTS} attempts). Please check botId/secret configuration.`;
+        runtime.error?.(`[${account.accountId}] ${errorMsg}`);
+        wsClient.disconnect();
+        await cleanup();
+        setStatus?.({
+          accountId: account.accountId,
+          running: false,
+          lastError: errorMsg,
+          lastStopAt: Date.now(),
+        });
+        return;
+      }
+
+      if (error instanceof WSReconnectExhaustedError) {
+        // 网络断线重连次数用尽（SDK 层已重试 WS_MAX_RECONNECT_ATTEMPTS 次）。
+        // 通常是网络/服务端问题，框架 auto-restart 可能恢复。
+        //
+        // reject Promise → 框架 auto-restart 介入（最多 MAX_RESTART_ATTEMPTS=10 次）
+        // 总连接尝试次数 = (1 首次 + WS_MAX_RECONNECT_ATTEMPTS 重连) × (1 首轮 + 10 auto-restart)
+        //                = 11 × 11 = 121 次
+        //
+        // 如果 Health Monitor 介入（每 5 分钟检查），会 resetRestartAttempts 重新计数，
+        // 受限于 DEFAULT_MAX_RESTARTS_PER_HOUR=10，每小时最多额外 10 × 121 = 1210 次。
+        // 但因网络断线通常是暂时性的，auto-restart + Health Monitor 的兜底机制是合理的。
+        //
+        // 显式调用 wsClient.disconnect() 确保 SDK 内部资源完全释放，
+        // 避免旧实例的定时器/队列残留。
+        wsClient.disconnect();
         cleanup().finally(() => reject(error));
+        return;
       }
     });
 

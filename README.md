@@ -1,3 +1,11 @@
+> 💡 **快速上手指引 & 交流群**
+>
+> 📖 [点击查看完整接入指引文档](https://doc.weixin.qq.com/doc/w3_AFYA1wY6ACoCNRxfnyGRJQaSa6jjJ?scode=AJEAIQdfAAo0RJmzxLAFYA1wY6ACo) — 包含配置步骤、产品介绍、常见问题解答等。
+>
+> 💬 扫码加入企业微信交流群：
+>
+> <img src="https://wwcdn.weixin.qq.com/node/wework/images/202603181801.a77d987fb8.png" alt="扫码入群交流" width="200" />
+
 # 🤖 WeCom OpenClaw Plugin
 
 **WeCom channel plugin for [OpenClaw](https://github.com/openclaw)** — by the Tencent WeCom team.
@@ -34,7 +42,17 @@
 Use the CLI tool to automatically install the plugin and complete bot configuration in one step:
 
 ```shell
+# Automatically install the channel plugin and quickly complete configuration; also works for updates
 npx -y @wecom/wecom-openclaw-cli install
+```
+
+More Options
+```shell
+# If installation fails, try force install
+npx -y @wecom/wecom-openclaw-cli install --force
+
+# Use --help to learn more about the tool
+npx -y @wecom/wecom-openclaw-cli --help
 ```
 
 ### Manual Install
