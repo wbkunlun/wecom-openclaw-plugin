@@ -4,7 +4,7 @@
 >
 > 💬 扫码加入企业微信交流群：
 >
-> <img src="https://wwcdn.weixin.qq.com/node/wework/images/202603181801.a77d987fb8.png" alt="扫码入群交流" width="200" />
+> <img src="https://wwcdn.weixin.qq.com/node/wework/images/202603241759.3fb01c32cc.png" alt="扫码入群交流" width="200" />
 
 # 特别说明
 > ****2026.3.22 版本 OpenClaw 兼容说明****
