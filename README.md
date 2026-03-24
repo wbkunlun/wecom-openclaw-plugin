@@ -6,6 +6,15 @@
 >
 > <img src="https://wwcdn.weixin.qq.com/node/wework/images/202603181801.a77d987fb8.png" alt="扫码入群交流" width="200" />
 
+# 特别说明
+> ****2026.3.22 版本 OpenClaw 兼容说明****
+> 
+> 如果你的 OpenClaw 是 2026.3.22 及以上的版本，请升级插件到 2026.3.24 及以上版本。
+> 
+> 如果你的 OpenClaw 是 2026.3.22 以下的版本，请保持插件版本在 2026.3.20 版本。
+> 
+> 你可以使用以下命令快速安装： `npx -y @wecom/wecom-openclaw-cli install --force`
+
 # 🤖 WeCom OpenClaw Plugin
 
 **WeCom channel plugin for [OpenClaw](https://github.com/openclaw)** — by the Tencent WeCom team.
@@ -35,7 +44,7 @@
 
 ### Requirements
 
-- OpenClaw `>= 2026.3.22`
+- OpenClaw `>= 2026.2.13`
 
 ### Quick Install
 
