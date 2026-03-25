@@ -30,7 +30,6 @@ import {
   THINKING_MESSAGE,
   MEDIA_IMAGE_PLACEHOLDER,
   MEDIA_DOCUMENT_PLACEHOLDER,
-  MESSAGE_PROCESS_TIMEOUT_MS,
   WS_HEARTBEAT_INTERVAL_MS,
   WS_MAX_RECONNECT_ATTEMPTS,
   WS_MAX_AUTH_FAILURE_ATTEMPTS,
@@ -40,7 +39,7 @@ import {
 } from "./const.js";
 import type { WeComMonitorOptions, MessageState } from "./interface.js";
 import { parseMessageContent, type MessageBody } from "./message-parser.js";
-import { sendWeComReply } from "./message-sender.js";
+import { sendWeComReply, StreamExpiredError } from "./message-sender.js";
 import { downloadAndSaveImages, downloadAndSaveFiles } from "./media-handler.js";
 import { uploadAndSendMedia } from "./media-uploader.js";
 import { checkGroupPolicy } from "./group-policy.js";
@@ -55,17 +54,8 @@ import {
   stopMessageStateCleanup,
   cleanupAccount,
 } from "./state-manager.js";
-import { withTimeout } from "./timeout.js";
-import { PLUGIN_VERSION } from "./version.js";
 
-/**
- * 去除文本中的 `<think>...</think>` 标签（支持跨行），返回剩余可见文本。
- * 用于判断大模型回复中是否包含实际用户可见内容（而非仅有 thinking 推理过程）。
- */
-function stripThinkTags(text: string): string {
-  return text;
-  // return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-}
+import { PLUGIN_VERSION } from "./version.js";
 
 // ============================================================================
 // 媒体本地路径白名单扩展
@@ -264,8 +254,9 @@ async function sendThinkingReply(params: {
   frame: WsFrame;
   streamId: string;
   runtime: RuntimeEnv;
+  state?: MessageState;
 }): Promise<void> {
-  const { wsClient, frame, streamId, runtime } = params;
+  const { wsClient, frame, streamId, runtime, state } = params;
   try {
     await sendWeComReply({
       wsClient,
@@ -276,17 +267,12 @@ async function sendThinkingReply(params: {
       streamId,
     });
   } catch (err) {
-    runtime.error?.(`[wecom] Failed to send thinking message: ${String(err)}`);
-  }
-}
-
-/**
- * 累积文本并判断是否有可见内容（去除 <think> 标签后）
- */
-function accumulateText(state: MessageState, text: string): void {
-  state.accumulatedText += text;
-  if (!state.hasText && stripThinkTags(state.accumulatedText)) {
-    state.hasText = true;
+    if (err instanceof StreamExpiredError && state) {
+      state.streamExpired = true;
+      runtime.log?.(`[wecom] Stream expired during thinking reply, will fallback to proactive send`);
+    } else {
+      runtime.error?.(`[wecom] Failed to send thinking message: ${String(err)}`);
+    }
   }
 }
 
@@ -305,7 +291,7 @@ async function sendMediaBatch(
   const chatId = body.chatid || body.from.userid;
   const mediaLocalRoots = await getExtendedMediaLocalRoots(account.config);
 
-  runtime.log?.(`[wecom][debug] mediaLocalRoots=${JSON.stringify(mediaLocalRoots)}, mediaUrls=${JSON.stringify(mediaUrls)}, hasText=${!!state.hasText}`);
+  runtime.log?.(`[wecom][debug] mediaLocalRoots=${JSON.stringify(mediaLocalRoots)}, mediaUrls=${JSON.stringify(mediaUrls)}`);
 
   for (const mediaUrl of mediaUrls) {
     const result = await uploadAndSendMedia({
@@ -348,32 +334,52 @@ async function sendMediaBatch(
  *    （agent 可能已通过内置 message 工具直接发送了文件，
  *    该路径走 outbound.sendMedia 完全绕过 deliver 回调，
  *    所以 state 中无记录，但文件已实际送达）
+ *
+ * 降级策略：
+ * - 当 streamExpired=true（errcode 846608）时，流式通道已不可用（>6分钟），
+ *   改用 wsClient.sendMessage 主动发送完整文本。
  */
 async function finishThinkingStream(ctx: DeliverContext): Promise<void> {
-  const { wsClient, frame, state, runtime } = ctx;
-  const visibleText = stripThinkTags(state.accumulatedText);
+  const {wsClient, frame, state, account, runtime} = ctx;
+  const body = frame.body as MessageBody;
+  const chatId = body.chatid || body.from.userid;
+  let finishText: string = state.accumulatedText;
 
-  let finishText: string;
-  if (visibleText) {
-    // 有可见文本：用完整文本关闭流（覆盖 thinking 为真实内容）
-    finishText = state.accumulatedText;
-  } else if (state.hasMedia) {
-    // 媒体成功发送：用友好提示告知用户
-    finishText = "📎 文件已发送，请查收。";
-  } else if (state.hasMediaFailed && state.mediaErrorSummary) {
-    // 媒体发送失败：直接用错误摘要替换 thinking 流（不再额外发 sendMessage）
-    finishText = state.mediaErrorSummary;
-  } else {
-    // 核心无可见文本且 deliver 中未处理过媒体。
-    //
-    // 不使用错误提示，因为 agent 可能已通过内置 message 工具直接调用
-    // outbound.sendMedia 成功发送了文件——该路径完全绕过 monitor 的 deliver
-    // 回调，所以 state.deliverCalled / state.hasMedia 均为 false，但文件
-    // 实际已送达用户。此时显示 "未生成回复" 会误导用户。
-    finishText = "✅ 处理完成。";
+  if (state.hasMedia) {
+    if (state.hasMediaFailed && state.mediaErrorSummary) {
+      // 媒体成功发送：用友好提示告知用户
+      finishText = finishText ? `${finishText}\n\n${state.mediaErrorSummary}` : state.mediaErrorSummary;
+    } else if (!finishText) {
+      finishText = "📎 文件已发送，请查收。";
+    }
   }
 
-  await sendWeComReply({ wsClient, frame, text: finishText, runtime, finish: true, streamId: state.streamId });
+  // if (!finishText) {
+  //   finishText = "✅ 处理完成。";
+  // }
+
+  if (finishText) {
+    // 尝试流式发送；若已知过期或发送时发现过期，统一降级为主动发送
+    let expired = state.streamExpired;
+    if (!expired) {
+      try {
+        await sendWeComReply({wsClient, frame, text: finishText, runtime, finish: true, streamId: state.streamId});
+      } catch (err) {
+        if (err instanceof StreamExpiredError) {
+          expired = true;
+        } else {
+          throw err;
+        }
+      }
+    }
+    if (expired) {
+      runtime.log?.(`[wecom] Stream expired, sending final text via sendMessage (proactive)`);
+      await wsClient.sendMessage(chatId, {
+        msgtype: "markdown",
+        markdown: { content: finishText },
+      });
+    }
+  }
 }
 
 /**
@@ -399,18 +405,44 @@ async function routeAndDispatchMessage(params: {
     if (!cleanedUp) { cleanedUp = true; onCleanup(); }
   };
 
+  let isShowThink = !(account.sendThinkingMessage ?? true);
+
   try {
     await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: config,
+      // replyResolver: async (ctx, opts) => {
+      //   const startTime = Date.now();
+      //   const TEN_MINUTES = 7 * 60 * 1000;
+      //
+      //   console.log('开始输出内容');
+      //
+      //   while (Date.now() - startTime < TEN_MINUTES) {
+      //     // 每隔一段时间发送一个 block reply
+      //     await opts?.onBlockReply?.({ text: `输出内容 ${new Date().toISOString()}` });
+      //     await new Promise(resolve => setTimeout(resolve, 30 * 1000)); // 每5秒输出一次
+      //   }
+      //
+      //   return { text: "10分钟输出完成" }; // 最终回复
+      // },
       dispatcherOptions: {
+        onReplyStart: async () => {
+          if (!isShowThink && state.streamId && !state.accumulatedText) {
+            try {
+              await sendThinkingReply({wsClient, frame, streamId: state.streamId, runtime, state})
+            } catch (e) {
+              runtime.error?.(`[wecom] sendThinkingReply threw err: ${String(e)}`);
+            }
+            isShowThink = true;
+          }
+        },
         deliver: async (payload, info) => {
           state.deliverCalled = true;
           // runtime.log?.(`[openclaw -> plugin] kind=${info.kind}, text=${payload.text ?? ''}, mediaUrl=${payload.mediaUrl ?? ''}, mediaUrls=${JSON.stringify(payload.mediaUrls ?? [])}`);
 
           // 累积文本
           if (payload.text) {
-            accumulateText(state, payload.text);
+            state.accumulatedText += (payload.text || '');
           }
 
           // 发送媒体（统一走主动发送）
@@ -431,9 +463,18 @@ async function routeAndDispatchMessage(params: {
             }
           }
 
-          // 中间帧：有可见文本时流式更新
-          if (info.kind !== "final" && state.hasText && state.accumulatedText) {
-            await sendWeComReply({ wsClient, frame, text: state.accumulatedText, runtime, finish: false, streamId: state.streamId });
+          // 中间帧：有可见文本时流式更新（流式过期后跳过，等 deliver 完成后主动发送）
+          if (info.kind !== "final" && state.accumulatedText && !state.streamExpired) {
+            try {
+              await sendWeComReply({ wsClient, frame, text: state.accumulatedText, runtime, finish: false, streamId: state.streamId });
+            } catch (err) {
+              if (err instanceof StreamExpiredError) {
+                state.streamExpired = true;
+                runtime.log?.(`[wecom] Stream expired during intermediate reply, will fallback to proactive send`);
+              } else {
+                throw err;
+              }
+            }
           }
         },
         onError: (err, info) => {
@@ -568,48 +609,29 @@ async function processWeComMessage(params: {
     deleteMessageState(messageId);
   };
 
-  // Step 6: 发送"思考中"消息
-  const shouldSendThinking = account.sendThinkingMessage ?? true;
-  if (shouldSendThinking) {
-    await sendThinkingReply({ wsClient, frame, streamId, runtime });
-  }
+  // // Step 6: 发送"思考中"消息
+  // const shouldSendThinking = account.sendThinkingMessage ?? true;
+  // if (shouldSendThinking) {
+  //   await sendThinkingReply({ wsClient, frame, streamId, runtime });
+  // }
 
   // Step 7: 构建上下文并路由到核心处理流程（带整体超时保护）
   const ctxPayload = buildMessageContext(frame, account, config, text, mediaList, quoteContent);
   // runtime.log?.(`[plugin -> openclaw] body=${text}, mediaPaths=${JSON.stringify(mediaList.map(m => m.path))}${quoteContent ? `, quote=${quoteContent}` : ''}`);
 
   try {
-    await withTimeout(
-      routeAndDispatchMessage({
-        ctxPayload,
-        config,
-        account,
-        wsClient,
-        frame,
-        state,
-        runtime,
-        onCleanup: cleanupState,
-      }),
-      MESSAGE_PROCESS_TIMEOUT_MS,
-      `Message processing timed out (msgId=${messageId})`,
-    );
+    await routeAndDispatchMessage({
+      ctxPayload,
+      config,
+      account,
+      wsClient,
+      frame,
+      state,
+      runtime,
+      onCleanup: cleanupState,
+    });
   } catch (err) {
-    runtime.error?.(`[wecom][plugin] Message processing failed or timed out: ${String(err)}`);
-    // 确保 thinking 流被关闭，防止异常/超时时 thinking 消息一直残留
-    try {
-      if (shouldSendThinking) {
-        await sendWeComReply({
-          wsClient,
-          frame,
-          text: "处理消息时出现异常，请稍后重试。",
-          runtime,
-          finish: true,
-          streamId: state.streamId,
-        });
-      }
-    } catch (finishErr) {
-      runtime.error?.(`[wecom] Failed to finish thinking stream on error: ${String(finishErr)}`);
-    }
+    runtime.error?.(`[wecom][plugin] Message processing failed: ${String(err)}`);
     cleanupState();
   }
 }
