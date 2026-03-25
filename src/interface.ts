@@ -34,8 +34,8 @@ export interface MessageState {
   accumulatedText: string;
   /** 流式回复的 streamId，用于保持同一个流式回复使用相同的 streamId */
   streamId?: string;
-  /** 是否有用户可见的文本内容（不包括 <think>...</think> 标签） */
-  hasText?: boolean;
+  // /** 是否有用户可见的文本内容（不包括 <think>...</think> 标签） */
+  // hasText?: boolean;
   /** 是否已成功发送过媒体文件 */
   hasMedia?: boolean;
   /** 是否有媒体发送失败（权限不足、文件过大等） */
@@ -44,6 +44,8 @@ export interface MessageState {
   mediaErrorSummary?: string;
   /** deliver 回调是否被调用过（用于区分"核心无回复"和"核心回复了空内容"） */
   deliverCalled?: boolean;
+  /** 流式回复是否已过期（errcode 846608，>6分钟），需降级为主动发送 */
+  streamExpired?: boolean;
 }
 
 // ============================================================================
