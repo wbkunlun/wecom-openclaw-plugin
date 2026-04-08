@@ -499,7 +499,7 @@ async function routeAndDispatchMessage(params: {
           }
         },
         deliver: async (payload, info) => {
-          runtime.log?.(`[openclaw -> plugin] kind=${info.kind}, text=${payload.text ?? ''}, mediaUrl=${payload.mediaUrl ?? ''}, mediaUrls=${JSON.stringify(payload.mediaUrls ?? [])}`);
+          runtime.log?.(`[openclaw -> plugin] kind=${info.kind}, text=${JSON.stringify(payload.text ?? '')}, mediaUrl=${payload.mediaUrl ?? ''}, mediaUrls=${JSON.stringify(payload.mediaUrls ?? [])}`);
 
           // 累积文本
           if (payload.text) {
