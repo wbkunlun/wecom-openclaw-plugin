@@ -54,6 +54,7 @@ import {
   setMessageState,
   deleteMessageState,
   setReqIdForChat,
+  setSessionChatInfo,
   warmupReqIdStore,
   startMessageStateCleanup,
   stopMessageStateCleanup,
@@ -487,6 +488,13 @@ async function routeAndDispatchMessage(params: {
     await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: config,
+      replyOptions: {
+        // 打印 LLM 返回的原始分片内容（在 openclaw 核心对 MEDIA: 指令解析之前），
+        // 用于排查流式分片导致 MEDIA 指令被切断、识别丢失等问题
+        onPartialReply: (payload: unknown) => {
+          runtime.log?.(`[openclaw -> plugin][partial] payload=${JSON.stringify(payload)}`);
+        },
+      },
       dispatcherOptions: {
         onReplyStart: async () => {
           if (!isShowThink && state.streamId && !state.accumulatedText) {
@@ -499,7 +507,7 @@ async function routeAndDispatchMessage(params: {
           }
         },
         deliver: async (payload, info) => {
-          runtime.log?.(`[openclaw -> plugin] kind=${info.kind}, text=${JSON.stringify(payload.text ?? '')}, mediaUrl=${payload.mediaUrl ?? ''}, mediaUrls=${JSON.stringify(payload.mediaUrls ?? [])}`);
+          runtime.log?.(`[openclaw -> plugin] kind=${info.kind}, payload=${JSON.stringify(payload)}, info=${JSON.stringify(info)}`);
 
           // 累积文本
           if (payload.text) {
@@ -718,6 +726,18 @@ async function processWeComMessageNow(entry: WeComMessageEntry): Promise<void> {
     quoteContent,
     runtime,
   );
+
+  // 以 sessionKey 为键记录「原始大小写」的 chatId 与 chatType，
+  // 供 MCP 工具工厂（index.ts:registerTool）在构造工具闭包时取回，
+  // 进而传递给需要原始 chatId 的拦截器（如 doc-auth-error 发送 biz_msg）。
+  //
+  // 注意：不要使用 parseSessionKeyChat 反解 sessionKey —— OpenClaw core
+  //       构建 sessionKey 时会将 peer.id 强制小写化，会导致企业微信
+  //       aibot_send_biz_msg 报 errcode=93006 invalid chatid。
+  setSessionChatInfo(route.sessionKey, {
+    chatId: resolvedChatId,
+    chatType: chatType === "group" ? "group" : "single",
+  });
   // runtime.log?.(`[plugin -> openclaw] body=${text}, mediaPaths=${JSON.stringify(mediaList.map(m => m.path))}${quoteContent ? `, quote=${quoteContent}` : ''}`);
 
   try {
@@ -971,26 +991,32 @@ export async function monitorWeComProvider(options: WeComMonitorOptions): Promis
           `[${account.accountId}] Received event callback: eventtype=${eventType ?? ""}, msgid=${eventBody.msgid ?? ""}`,
         );
 
-        if (eventType !== "template_card_event") {
-          return;
-        }
-
-        const templateCardEvent = eventBody.event?.template_card_event;
-        runtime.log?.(
-          `[${account.accountId}] Received template_card_event: event_key=${templateCardEvent?.event_key ?? ""}, task_id=${templateCardEvent?.task_id ?? ""}`,
-        );
-
-        try {
-          await updateTemplateCardOnEvent({
-            frame,
-            accountId: account.accountId,
-            runtime,
-            wsClient,
-          });
-        } catch (updateErr) {
-          runtime.error?.(
-            `[${account.accountId}] [template-card-update] Failed to update template card: ${String(updateErr)}`,
+        if (eventType === "template_card_event") {
+          const templateCardEvent = eventBody.event?.template_card_event;
+          runtime.log?.(
+            `[${account.accountId}] Received template_card_event: event_key=${templateCardEvent?.event_key ?? ""}, task_id=${templateCardEvent?.task_id ?? ""}`,
           );
+
+          try {
+            await updateTemplateCardOnEvent({
+              frame,
+              accountId: account.accountId,
+              runtime,
+              wsClient,
+            });
+          } catch (updateErr) {
+            runtime.error?.(
+              `[${account.accountId}] [template-card-update] Failed to update template card: ${String(updateErr)}`,
+            );
+          }
+        } else if (eventType === "auth_change_event") {
+          const authChangeEvent = eventBody.event?.auth_change_event;
+          runtime.log?.(
+            `[${account.accountId}] Received auth_change_event: auth_list=[${authChangeEvent?.auth_list?.join(", ") ?? ""}]`,
+          );
+        } else {
+          // 其他未识别的事件类型，跳过
+          return;
         }
 
         const entry = await prepareWeComMessage({
@@ -1004,11 +1030,11 @@ export async function monitorWeComProvider(options: WeComMonitorOptions): Promis
           await processWeComMessageNow(entry);
         }
       } catch (err) {
-        runtime.error?.(`[${account.accountId}] Failed to process template_card_event: ${String(err)}`);
+        runtime.error?.(`[${account.accountId}] Failed to process event callback (${(frame.body as MessageBody)?.event?.eventtype ?? "unknown"}): ${String(err)}`);
       }
     });
 
-    runtime.log?.(`[${account.accountId}] Event listeners attached: message + event(template_card_event)`);
+    runtime.log?.(`[${account.accountId}] Event listeners attached: message + event(template_card_event, auth_change_event)`);
 
     // 启动前预热 reqId 缓存，确保完成后再建立连接，避免 getSync 在预热完成前返回 undefined
     warmupReqIdStore(account.accountId, (...args) => runtime.log?.(...args))

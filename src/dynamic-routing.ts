@@ -4,7 +4,7 @@
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { shouldUseDynamicAgent, generateAgentId } from "./dynamic-agent.js";
 
 /**
