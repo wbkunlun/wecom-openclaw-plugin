@@ -1,6 +1,6 @@
 {
   "name": "@wecom/wecom-openclaw-plugin",
-  "version": "2026.4.8",
+  "version": "2026.4.22",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -22,7 +22,8 @@
     "clean": "rm -rf dist",
     "prebuild": "npm run clean",
     "release": "node scripts/publish-all.mjs",
-    "release:dry": "node scripts/publish-all.mjs --dry-run"
+    "release:dry": "node scripts/publish-all.mjs --dry-run",
+    "deploy:local": "bash scripts/dev-deploy.sh"
   },
   "keywords": [
     "wecom",
